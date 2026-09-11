@@ -1,0 +1,752 @@
+{
+  "name": "📧 Dual-channel prospect v1 — API gouv + confiance email → Notion",
+  "nodes": [
+    {
+      "id": "dc0",
+      "name": "📋 Dual-channel v1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        40,
+        40
+      ],
+      "parameters": {
+        "width": 520,
+        "height": 200,
+        "content": "## UN SEUL workflow → Notion\n\nAPI gouv → scrape email (confiance) + LinkedIn → Haiku ICP douleur → Notion\n\n**Email colonne Notion** = UNIQUEMENT email scrapé + MX OK\n**Hypothèses** = Notes seulement — jamais envoyées auto\n\nStatut sortie : À valider (toi tu valides avant envoi)"
+      }
+    },
+    {
+      "id": "dc1",
+      "name": "Chaque jour à 6h (Lun-Ven)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        80,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * 1-5"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "dc1m",
+      "name": "▶️ Lancer manuellement",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        80,
+        440
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "dc1g",
+      "name": "Fusion déclencheurs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [
+        260,
+        360
+      ],
+      "parameters": {
+        "mode": "chooseBranch",
+        "numberInputs": 2
+      }
+    },
+    {
+      "id": "dc2",
+      "name": "⚙️ Configuration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        460,
+        360
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "ai_model",
+              "value": "claude-3-5-haiku-20241022",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "notion_statut",
+              "value": "À valider",
+              "type": "string"
+            },
+            {
+              "id": "c3",
+              "name": "max_leads_per_run",
+              "value": 15,
+              "type": "number"
+            },
+            {
+              "id": "c4",
+              "name": "score_min",
+              "value": 55,
+              "type": "number"
+            },
+            {
+              "id": "c5",
+              "name": "notion_database_id",
+              "value": "REMPLACER_PAR_ID_NOTION",
+              "type": "string"
+            },
+            {
+              "id": "c6",
+              "name": "departments",
+              "value": "=[\"75\", \"92\", \"93\", \"94\", \"69\", \"31\", \"33\"]",
+              "type": "array"
+            },
+            {
+              "id": "c7",
+              "name": "notion_vague",
+              "value": "Dual-channel ops",
+              "type": "string"
+            },
+            {
+              "id": "c8",
+              "name": "exiger_email_verifie",
+              "value": false,
+              "type": "boolean"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "dc3",
+      "name": "Notion — SIRENs existants",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        680,
+        360
+      ],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "={{ $('⚙️ Configuration').first().json.notion_database_id }}",
+        "returnAll": true,
+        "options": {}
+      },
+      "credentials": {
+        "notionApi": {
+          "name": "Notion API"
+        }
+      },
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "id": "dc4",
+      "name": "Bootstrap (index + URLs API)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        360
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Init run + index Notion SIRENs + génère URLs API (1 node au lieu de 2)\nconst cfg = $('⚙️ Configuration').first().json;\nconst staticData = $getWorkflowStaticData('global');\nstaticData.sirens_vus = {};\nstaticData.notion_sirens = {};\nstaticData.leads_emitted = 0;\nstaticData.lead_buffer = [];\n\nfor (const { json: r } of $input.all()) {\n  const siren = String(\n    r.SIREN || r.siren\n    || r.property_SIREN\n    || (r.properties?.SIREN?.rich_text?.[0]?.plain_text)\n    || (r.properties?.SIREN?.title?.[0]?.plain_text)\n    || ''\n  ).trim();\n  if (siren) staticData.notion_sirens[siren] = true;\n}\n\nconst base = 'https://recherche-entreprises.api.gouv.fr/search';\nconst departments = cfg.departments || ['75', '92', '93', '94'];\nconst tranches = ['03', '11', '12'];\nconst out = [];\nfor (const dept of departments) {\n  for (const tranche of tranches) {\n    for (let page = 1; page <= 2; page++) {\n      const q = new URLSearchParams({\n        activite_principale: '73.11Z',\n        departement: dept,\n        tranche_effectif_salarie: tranche,\n        etat_administratif: 'A',\n        per_page: '25',\n        page: String(page),\n      });\n      out.push({ json: { url: `${base}?${q}`, dept, tranche, page } });\n    }\n  }\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "dc5",
+      "name": "Boucle API gouv",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1120,
+        360
+      ],
+      "parameters": {
+        "batchSize": 1
+      }
+    },
+    {
+      "id": "dc5w",
+      "name": "Pause API (500ms)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        280
+      ],
+      "parameters": {
+        "amount": 0.5,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "dc6",
+      "name": "API Recherche Entreprises",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        280
+      ],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "V7CE-DualChannel/1.0"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "dc7",
+      "name": "Parser leads → buffer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        280
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const data = $input.first().json;\nconst meta = $('Boucle API gouv').first().json;\nconst cfg = $('⚙️ Configuration').first().json;\nconst companies = data.results || [];\nif (!companies.length) return [];\n\nconst s = $getWorkflowStaticData('global');\nconst maxTotal = cfg.max_leads_per_run || 15;\nconst trancheLabel = { '03': '6-9 sal.', '11': '10-19 sal.', '12': '20-49 sal.', 'NN': 'N/D', '00': '0 sal.' };\n\nfunction pickDirigeant(dirigeants) {\n  const prefer = ['president', 'président', 'directeur', 'gerant', 'gérant', 'fondateur', 'ceo', 'dg'];\n  const list = dirigeants || [];\n  const scored = list.map(d => {\n    const q = (d.qualite || '').toLowerCase();\n    const score = prefer.findIndex(p => q.includes(p));\n    return { d, score: score === -1 ? 99 : score };\n  }).sort((a, b) => a.score - b.score);\n  return (scored[0] || {}).d || list[0] || {};\n}\n\nfunction normalizeUrl(url) {\n  if (!url || typeof url !== 'string') return null;\n  let u = url.trim();\n  if (!u) return null;\n  if (!/^https?:\\/\\//i.test(u)) u = 'https://' + u;\n  return u.replace(/\\/+$/, '');\n}\n\nfunction flags(c) {\n  if (!c || typeof c !== 'object') return '';\n  const f = [];\n  if (c.est_association) f.push('association');\n  if (c.est_entrepreneur_individuel) f.push('EI');\n  if (c.est_organisme_formation) f.push('formation');\n  return f.join(', ') || '—';\n}\n\nconst out = [];\nfor (const e of companies) {\n  if (s.leads_emitted >= maxTotal) break;\n  const siren = String(e.siren || '').trim();\n  if (!siren || s.sirens_vus[siren] || s.notion_sirens[siren]) continue;\n  const complements = flags(e.complements);\n  if (/association|EI|formation/i.test(complements)) continue;\n\n  s.sirens_vus[siren] = true;\n  const siege = e.siege || {};\n  const dir = pickDirigeant(e.dirigeants);\n  const finances = e.finances || {};\n  let ca = null;\n  for (const annee of Object.keys(finances).sort().reverse()) {\n    const val = finances[annee]?.ca;\n    if (val) { ca = val; break; }\n  }\n  const tranche = String(e.tranche_effectif_salarie || siege.tranche_effectif_salarie || '');\n  const siteWeb = normalizeUrl(siege.site_internet);\n  const lead = {\n    siren, siret: siege.siret || '',\n    nom: e.nom_complet || e.nom_raison_sociale || '',\n    activite_principale: e.activite_principale || '',\n    cp: siege.code_postal || '', ville: siege.libelle_commune || '',\n    departement: siege.departement || meta.dept || '',\n    tranche, trancheLabel: trancheLabel[tranche] || tranche,\n    caFormate: ca ? `${(ca / 1e6).toFixed(1)}M€` : 'N/D',\n    dirNom: dir.nom || '', dirPrenom: (dir.prenoms || '').split(' ')[0] || '',\n    dirQualite: dir.qualite || '', siteWeb, hasSiteWeb: !!siteWeb,\n    complementsFlags: complements,\n    lead_json: JSON.stringify({\n      siren, nom: e.nom_complet || e.nom_raison_sociale || '',\n      ville: siege.libelle_commune || '', tranche: trancheLabel[tranche] || tranche,\n      dirigeant: `${(dir.prenoms || '').split(' ')[0] || ''} ${dir.nom || ''}`.trim(),\n      site: siteWeb,\n    }),\n  };\n  s.lead_buffer.push(lead);\n  s.leads_emitted += 1;\n  out.push({ json: lead });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "dc8",
+      "name": "Flush buffer leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        520
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const s = $getWorkflowStaticData('global');\nconst leads = s.lead_buffer || [];\ns.lead_buffer = [];\nif (!leads.length) return [];\nreturn leads.map(j => ({ json: j }));"
+      }
+    },
+    {
+      "id": "dc9",
+      "name": "Boucle — 1 lead",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1340,
+        520
+      ],
+      "parameters": {
+        "batchSize": 1
+      }
+    },
+    {
+      "id": "dc10",
+      "name": "Scrape + confiance email/LinkedIn",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        520
+      ],
+      "parameters": {
+        "jsCode": "// Dual-channel scrape — emails avec confiance + LinkedIn URL\nconst company = $json;\nconst siteWeb = company.siteWeb || null;\nconst base = siteWeb ? siteWeb.replace(/\\/+$/, '') : null;\nconst fallback = `https://www.societe.com/societe/${company.siren}.html`;\n\nconst BLACKLIST = ['example.', 'sentry.', 'wixpress.', 'noreply', 'no-reply', 'privacy', 'abuse@', 'cookie', 'dpo@', 'rgpd@', 'wordpress.com'];\nconst GENERIC_PREFIX = ['contact@', 'hello@', 'bonjour@', 'info@', 'commercial@', 'agency@', 'agence@'];\n\nasync function fetchText(url) {\n  if (!url) return '';\n  try {\n    const res = await this.helpers.httpRequest({\n      method: 'GET', url, timeout: 9000,\n      returnFullResponse: false, json: false,\n      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; V7CE-Bot/1.0)' },\n    });\n    return String(res || '');\n  } catch { return ''; }\n}\n\nfunction domainFromSite(url) {\n  try {\n    return (url || '').replace(/^https?:\\/\\//i, '').replace(/^www\\./i, '').split('/')[0].toLowerCase();\n  } catch { return ''; }\n}\n\nfunction cleanEmails(raw, source) {\n  const emailRegex = /[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/g;\n  const mailto = [...String(raw).matchAll(/mailto:([^\\s\"'<>?]+)/gi)].map(m => m[1].split('?')[0]);\n  const found = [...mailto, ...(String(raw).match(emailRegex) || [])]\n    .map(e => e.toLowerCase().trim())\n    .filter(e => e && !BLACKLIST.some(b => e.includes(b)));\n  return [...new Set(found)].map(e => ({ email: e, source }));\n}\n\nfunction extractLinkedIn(html) {\n  const re = /https?:\\/\\/(?:www\\.)?linkedin\\.com\\/in\\/[a-zA-Z0-9\\-_%]+\\/?/gi;\n  const hits = [...new Set((String(html).match(re) || []))];\n  return hits[0] || '';\n}\n\nfunction pickBest(candidates, domain) {\n  if (!candidates.length) return null;\n  const onDomain = domain ? candidates.filter(c => c.email.includes('@' + domain) || c.email.endsWith('@' + domain)) : candidates;\n  const pool = onDomain.length ? onDomain : candidates;\n  const order = ['verifie_mentions_legales', 'verifie_site', 'generique_site'];\n  for (const tier of order) {\n    const tiered = pool.filter(c => c.tier === tier);\n    if (tiered.length) {\n      const generic = GENERIC_PREFIX.map(p => tiered.find(c => c.email.startsWith(p))).find(Boolean);\n      return generic || tiered[0];\n    }\n  }\n  return pool[0];\n}\n\nconst paths = [\n  { path: '/mentions-legales', tier: 'verifie_mentions_legales' },\n  { path: '/legal', tier: 'verifie_mentions_legales' },\n  { path: '/mentions-legales.html', tier: 'verifie_mentions_legales' },\n  { path: '/contact', tier: 'verifie_site' },\n  { path: '/contactez-nous', tier: 'verifie_site' },\n  { path: '/equipe', tier: 'verifie_site' },\n  { path: '/team', tier: 'verifie_site' },\n  { path: '/about', tier: 'verifie_site' },\n  { path: '/a-propos', tier: 'verifie_site' },\n];\n\nlet allHtml = '';\nlet candidates = [];\nconst domain = domainFromSite(siteWeb);\n\nif (base) {\n  const homeHtml = await fetchText.call(this, base);\n  allHtml += homeHtml;\n  for (const e of cleanEmails(homeHtml, 'home')) {\n    const tier = GENERIC_PREFIX.some(p => e.email.startsWith(p)) ? 'generique_site' : 'verifie_site';\n    candidates.push({ ...e, tier });\n  }\n  for (const { path, tier } of paths) {\n    const html = await fetchText.call(this, base + path);\n    if (!html || html.length < 80) continue;\n    allHtml += ' ' + html;\n    for (const e of cleanEmails(html, path)) {\n      const t = tier === 'verifie_mentions_legales' ? tier\n        : (GENERIC_PREFIX.some(p => e.email.startsWith(p)) ? 'generique_site' : 'verifie_site');\n      candidates.push({ ...e, tier: t, from: path });\n    }\n  }\n} else {\n  const socHtml = await fetchText.call(this, fallback);\n  allHtml = socHtml;\n  candidates = cleanEmails(socHtml, 'societe_com').map(e => ({ ...e, tier: 'verifie_site' }));\n}\n\n// dédup candidates keep best tier per email\nconst byEmail = {};\nfor (const c of candidates) {\n  const prev = byEmail[c.email];\n  const rank = { verifie_mentions_legales: 3, verifie_site: 2, generique_site: 1 };\n  if (!prev || rank[c.tier] > rank[prev.tier]) byEmail[c.email] = c;\n}\ncandidates = Object.values(byEmail);\n\nconst best = pickBest(candidates, domain);\nlet email = best?.email || '';\nlet email_confiance = best?.tier || 'aucun';\nlet email_source_page = best?.from || best?.source || '';\n\n// Hypothèses — JAMAIS dans colonne Email Notion\nconst prenom = (company.dirPrenom || '').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/[^a-z]/g, '');\nconst nom = (company.dirNom || '').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/[^a-z]/g, '');\nconst hypotheses = [];\nif (domain && prenom && nom) {\n  hypotheses.push(`${prenom}.${nom}@${domain}`, `${prenom[0]}${nom}@${domain}`, `${prenom}@${domain}`);\n} else if (domain) {\n  hypotheses.push(`contact@${domain}`, `hello@${domain}`);\n}\nconst email_hypotheses = [...new Set(hypotheses)].filter(h => h !== email);\n\n// MX check\nlet mx_ok = false;\nconst emailDomain = (email.split('@')[1] || domain || '').toLowerCase();\nif (emailDomain) {\n  try {\n    const mx = await this.helpers.httpRequest({\n      method: 'GET',\n      url: `https://dns.google/resolve?name=${encodeURIComponent(emailDomain)}&type=MX`,\n      json: true,\n      timeout: 6000,\n    });\n    mx_ok = !!(mx.Answer && mx.Answer.length);\n  } catch { mx_ok = false; }\n}\n\n// Règle stricte : colonne Email Notion uniquement si scrapé + MX OK\nconst EMAIL_TIERS_OK = ['verifie_mentions_legales', 'verifie_site'];\nlet email_pour_notion = '';\nif (email && EMAIL_TIERS_OK.includes(email_confiance) && mx_ok) {\n  email_pour_notion = email;\n} else if (email && email_confiance === 'generique_site' && mx_ok) {\n  // générique = réel mais boîte partagée — on remplit avec flag dans Notes\n  email_pour_notion = email;\n}\n\nif (email && !mx_ok) {\n  email_confiance = 'mx_invalide';\n  email_pour_notion = '';\n}\n\nlet linkedin_url = extractLinkedIn(allHtml);\nlet linkedin_confiance = linkedin_url ? 'verifie_site' : 'aucun';\nconst nomEntreprise = (company.nom || '').trim();\nconst nomContact = `${company.dirPrenom || ''} ${company.dirNom || ''}`.trim();\nlet linkedin_search = '';\nif (!linkedin_url && nomContact) {\n  linkedin_search = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`${nomContact} ${nomEntreprise}`)}`;\n  linkedin_confiance = 'recherche_manuelle';\n} else if (!linkedin_url && nomEntreprise) {\n  linkedin_search = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`${nomEntreprise} fondateur directeur`)}`;\n  linkedin_confiance = 'recherche_manuelle';\n}\n\nconst texteWeb = String(allHtml)\n  .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/\\s+/g, ' ').trim().substring(0, 3200);\n\nconst hasContactChannel = !!email_pour_notion || !!linkedin_url;\nconst emailsDetectes = candidates.map(c => `${c.email}(${c.tier})`).join(' | ');\n\nreturn [{\n  json: {\n    ...company,\n    email_scrape: email,\n    email_pour_notion,\n    email_confiance,\n    email_source_page,\n    email_hypotheses: email_hypotheses.join(' | '),\n    mx_ok,\n    emails_detectes: emailsDetectes,\n    linkedin_url,\n    linkedin_confiance,\n    linkedin_search,\n    textePourIA: (texteWeb || '[site muet]') + '\\n' + (company.lead_json || ''),\n    site_muet: texteWeb.length < 120 ? 'oui' : 'non',\n    hasContactChannel,\n    nomContact: nomContact || 'À identifier',\n  },\n}];"
+      }
+    },
+    {
+      "id": "dc11",
+      "name": "Canal contact trouvé ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1780,
+        520
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.hasContactChannel }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "dc12",
+      "name": "Qualification ICP douleur",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        2000,
+        520
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "Tu qualifies des agences marketing francophones pour une offre d'automatisation ops (reporting client #1, onboarding #2).\n\nRÈGLES STRICTES :\n- decision=OUI|NON|INCERTAIN\n- score_ia 0-100 (reporting récurrent + portefeuille clients = bonus)\n- angle court lié reporting ou onboarding\n- N'invente JAMAIS email ou LinkedIn\n- NON si solopreneur, e-commerce pur, ou pas agence services clients\n\n{{ $json.nom }} · {{ $json.ville }} ({{ $json.trancheLabel }})\nDirigeant : {{ $json.nomContact }}\nEmail vérifié pour Notion : {{ $json.email_pour_notion || 'aucun' }}\nConfiance email : {{ $json.email_confiance }}\nLinkedIn : {{ $json.linkedin_url || $json.linkedin_search }}\nSite muet : {{ $json.site_muet }}\n\n{{ $json.textePourIA }}",
+        "hasOutputParser": true,
+        "batching": {}
+      },
+      "continueOnFail": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "dc12m",
+      "name": "Claude Haiku",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        2000,
+        700
+      ],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "={{ $('⚙️ Configuration').first().json.ai_model }}",
+          "mode": "id"
+        },
+        "options": {
+          "maxTokensToSample": 500,
+          "temperature": 0.1
+        }
+      },
+      "credentials": {
+        "anthropicApi": {
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "id": "dc12p",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        2180,
+        700
+      ],
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"decision\": \"OUI\",\n  \"score_ia\": 72,\n  \"angle\": \"reporting client hebdo\",\n  \"raison\": \"agence multi-clients mentionnée\",\n  \"liste\": \"A-list\"\n}"
+      }
+    },
+    {
+      "id": "dc13",
+      "name": "Finaliser fiche dual-channel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        520
+      ],
+      "parameters": {
+        "jsCode": "const cfg = $('⚙️ Configuration').first().json;\nconst prev = $('Scrape + confiance email/LinkedIn').first().json;\nconst q = ($input.item.json.output || $input.item.json);\nconst s = $getWorkflowStaticData('global');\n\nconst decision = String(q.decision || 'INCERTAIN').toUpperCase();\nconst score = Number(q.score_ia) || 0;\nconst score_ok = score >= (cfg.score_min || 55);\nconst duplicate = !!(s.notion_sirens && s.notion_sirens[prev.siren]);\n\nconst prenom = (prev.dirPrenom || '').trim();\nconst agence = (prev.nom || '').trim();\nconst angle = q.angle || 'reporting client automatisé';\n\nconst message_email_m1 = prenom\n  ? `Objet: Question rapide — reporting chez ${agence}\\n\\nBonjour ${prenom},\\n\\nJe vois que ${agence} gère un portefeuille clients — sur ce type d'agence, le reporting récurrent mange souvent des heures chaque semaine.\\n\\nJ'ai une démo Loom de 2 min sur comment automatiser ça (sans changer vos outils). Si ça t'intéresse, réponds DEMO.\\n\\nSedera`\n  : `Objet: Question rapide — reporting agence\\n\\nBonjour,\\n\\nJe travaille avec des agences francophones sur l'automatisation du reporting client. Démo 2 min dispo — réponds DEMO si curieux.\\n\\nSedera`;\n\nconst note_linkedin = prenom\n  ? `Salut ${prenom}, je vois ${agence} — je bosse sur l'automatisation du reporting client pour les agences. Content de me connecter.`\n  : `Bonjour, je vois ${agence} — je bosse sur l'automatisation ops agence. Content de me connecter.`;\n\nconst notes = [\n  `canal: email+linkedin`,\n  `email_confiance: ${prev.email_confiance}`,\n  prev.email_source_page ? `email_source: ${prev.email_source_page}` : '',\n  prev.email_scrape ? `email_scrape: ${prev.email_scrape}` : '',\n  prev.email_hypotheses ? `email_hypotheses: ${prev.email_hypotheses}` : '',\n  `mx_ok: ${prev.mx_ok}`,\n  `linkedin_confiance: ${prev.linkedin_confiance}`,\n  prev.linkedin_search && !prev.linkedin_url ? `linkedin_search: ${prev.linkedin_search}` : '',\n  `score: ${score}`,\n  `angle: ${angle}`,\n  prev.emails_detectes ? `emails_detectes: ${prev.emails_detectes}` : '',\n  `message_email_m1: ${message_email_m1.replace(/\\n/g, ' \\\\n ')}`,\n  `note_linkedin: ${note_linkedin}`,\n  prev.email_confiance === 'generique_site' ? '⚠️ email_generique — vérifier destinataire avant envoi' : '',\n  prev.email_hypotheses && !prev.email_pour_notion ? '⚠️ pas d email scrapé — NE PAS utiliser les hypothèses sans vérif manuelle' : '',\n].filter(Boolean).join(' | ');\n\nconst ok_pour_notion = prev.hasContactChannel && !duplicate && decision !== 'NON' && score_ok\n  && (prev.email_pour_notion || prev.linkedin_url || prev.linkedin_search);\n\nreturn [{\n  json: {\n    ...prev,\n    decision, score_ia: score,\n    liste: q.liste || (score >= 75 ? 'A-list' : (score >= 55 ? 'B-list' : 'C-list')),\n    angle, raison_ia: q.raison || '',\n    message_email_m1, note_linkedin, notes_notion: notes,\n    ok_pour_notion,\n  },\n}];"
+      }
+    },
+    {
+      "id": "dc14",
+      "name": "Créer dans Notion ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2440,
+        520
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.ok_pour_notion }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "dc15",
+      "name": "Notion — créer prospect",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        2660,
+        480
+      ],
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "={{ $('⚙️ Configuration').first().json.notion_database_id }}",
+        "title": "={{ $json.nomContact }}",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Agence|rich_text",
+              "textContent": "={{ $json.nom }}"
+            },
+            {
+              "key": "Email|email",
+              "emailValue": "={{ $json.email_pour_notion || '' }}"
+            },
+            {
+              "key": "LinkedIn|url",
+              "urlValue": "={{ $json.linkedin_url || '' }}"
+            },
+            {
+              "key": "Notes|rich_text",
+              "textContent": "={{ $json.notes_notion }}"
+            },
+            {
+              "key": "Statut|select",
+              "selectValue": "={{ $('⚙️ Configuration').first().json.notion_statut }}"
+            },
+            {
+              "key": "Vague|select",
+              "selectValue": "={{ $('⚙️ Configuration').first().json.notion_vague }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "notionApi": {
+          "name": "Notion API"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "dc16",
+      "name": "Skip — pas de canal",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        720
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "dc17",
+      "name": "Cache SIREN + suite boucle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        520
+      ],
+      "parameters": {
+        "jsCode": "const s = $getWorkflowStaticData('global');\nconst lead = $('Finaliser fiche dual-channel').first()?.json || $('Scrape + confiance email/LinkedIn').first()?.json;\nif (lead?.siren) s.notion_sirens[lead.siren] = true;\nreturn [{ json: { siren: lead?.siren, ok: true } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Chaque jour à 6h (Lun-Ven)": {
+      "main": [
+        [
+          {
+            "node": "Fusion déclencheurs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "▶️ Lancer manuellement": {
+      "main": [
+        [
+          {
+            "node": "Fusion déclencheurs",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Fusion déclencheurs": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Configuration": {
+      "main": [
+        [
+          {
+            "node": "Notion — SIRENs existants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion — SIRENs existants": {
+      "main": [
+        [
+          {
+            "node": "Bootstrap (index + URLs API)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bootstrap (index + URLs API)": {
+      "main": [
+        [
+          {
+            "node": "Boucle API gouv",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boucle API gouv": {
+      "main": [
+        [
+          {
+            "node": "Flush buffer leads",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Pause API (500ms)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pause API (500ms)": {
+      "main": [
+        [
+          {
+            "node": "API Recherche Entreprises",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Recherche Entreprises": {
+      "main": [
+        [
+          {
+            "node": "Parser leads → buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser leads → buffer": {
+      "main": [
+        [
+          {
+            "node": "Boucle API gouv",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flush buffer leads": {
+      "main": [
+        [
+          {
+            "node": "Boucle — 1 lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boucle — 1 lead": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Scrape + confiance email/LinkedIn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape + confiance email/LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "Canal contact trouvé ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Canal contact trouvé ?": {
+      "main": [
+        [
+          {
+            "node": "Qualification ICP douleur",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip — pas de canal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qualification ICP douleur": {
+      "main": [
+        [
+          {
+            "node": "Finaliser fiche dual-channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Haiku": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Qualification ICP douleur",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Qualification ICP douleur",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finaliser fiche dual-channel": {
+      "main": [
+        [
+          {
+            "node": "Créer dans Notion ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Créer dans Notion ?": {
+      "main": [
+        [
+          {
+            "node": "Notion — créer prospect",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cache SIREN + suite boucle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion — créer prospect": {
+      "main": [
+        [
+          {
+            "node": "Cache SIREN + suite boucle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip — pas de canal": {
+      "main": [
+        [
+          {
+            "node": "Cache SIREN + suite boucle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cache SIREN + suite boucle": {
+      "main": [
+        [
+          {
+            "node": "Boucle — 1 lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
